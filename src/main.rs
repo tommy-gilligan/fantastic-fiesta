@@ -36,6 +36,8 @@ use buttons::{Buttons, ButtonPress};
 use sensor::Ds18b20;
 use status_leds::StatusLeds;
 use display::Display;
+mod credentials;
+use credentials::configuration;
 
 enum ConfigurationState {
     WifiUp {
@@ -81,12 +83,6 @@ assign_resources! {
     },
 }
 
-#[derive(Debug, Format)]
-struct Configuration {
-    ssid: String<32>,
-    password: String<63>,
-}
-
 bind_interrupts!(struct Irqs {
     PIO0_IRQ_0 => InterruptHandler<PIO0>;
     PIO1_IRQ_0 => InterruptHandler<PIO1>;
@@ -104,10 +100,7 @@ async fn net_task(mut runner: embassy_net::Runner<'static, cyw43::NetDriver<'sta
 
 #[embassy_executor::task]
 async fn network(spawner: Spawner, r: Network) {
-    let c = Configuration {
-        ssid: String::try_from("").unwrap(),
-        password: String::try_from("").unwrap(),
-    };
+    let c = configuration();
     info!("{:?}", &c);
 
     let mut rng = RoscRng;
