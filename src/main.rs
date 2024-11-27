@@ -148,14 +148,19 @@ async fn network(spawner: Spawner, r: Network) {
         Timer::after_millis(100).await;
     }
 
+    println!("before stack up");
     if stack.is_config_up() && stack.is_link_up() {
+        println!("after stack up");
+
         CONFIGURATION_CHANNEL
             .send(ConfigurationState::WifiUp {
                 ip: stack.config_v4().unwrap(),
                 hardware: stack.hardware_address(),
             })
             .await;
+        println!("before subscribe measurement");
         let mut subscriber = MEASUREMENT_CHANNEL.subscriber().unwrap();
+        println!("after subscribe measurement");
 
         network::listen(stack, &mut subscriber).await;
     } else {
@@ -198,7 +203,9 @@ pub async fn measurement(_spawner: Spawner, r: Measurement) {
     loop {
         sensor.start().await;
         Timer::after_secs(1).await;
-        publisher.publish_immediate(sensor.temperature().await.ok());
+        let t = sensor.temperature().await.ok();
+        println!("{:?}", t);
+        publisher.publish_immediate(t);
         Timer::after_millis(1000).await;
     }
 }
