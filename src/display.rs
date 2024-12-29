@@ -1,7 +1,7 @@
+use core::fmt;
+use embassy_net::{HardwareAddress, StaticConfigV4};
+use embassy_rp::i2c::{self, Config as I2CConfig, Instance, SclPin, SdaPin};
 use embassy_rp::Peripheral;
-use embassy_rp::{
-    i2c::{self, Config as I2CConfig, SdaPin, SclPin, Instance},
-};
 use embedded_graphics::{
     mono_font::{
         ascii::{FONT_10X20, FONT_6X9, FONT_7X14},
@@ -12,18 +12,32 @@ use embedded_graphics::{
     primitives::{PrimitiveStyleBuilder, StrokeAlignment},
     text::{Alignment, Text},
 };
-use embassy_net::{StaticConfigV4, HardwareAddress};
-use ssd1306::{prelude::*, I2CDisplayInterface, Ssd1306};
 use heapless::String;
-use core::fmt;
+use ssd1306::{prelude::*, I2CDisplayInterface, Ssd1306};
 
-pub struct Display<'d, T>(Ssd1306<I2CInterface<embassy_rp::i2c::I2c<'d, T, embassy_rp::i2c::Blocking>>, ssd1306::size::DisplaySize128x64, ssd1306::mode::BufferedGraphicsMode<ssd1306::size::DisplaySize128x64>>) where T: Instance;
+pub struct Display<'d, T>(
+    Ssd1306<
+        I2CInterface<embassy_rp::i2c::I2c<'d, T, embassy_rp::i2c::Blocking>>,
+        ssd1306::size::DisplaySize128x64,
+        ssd1306::mode::BufferedGraphicsMode<ssd1306::size::DisplaySize128x64>,
+    >,
+)
+where
+    T: Instance;
 
-impl <'d, T>Display<'d, T> where T: Instance {
-    pub fn new(peri: impl Peripheral<P = T> + 'd, scl: impl Peripheral<P = impl SclPin<T>> + 'd, sda: impl Peripheral<P = impl SdaPin<T>> + 'd) -> Self {
+impl<'d, T> Display<'d, T>
+where
+    T: Instance,
+{
+    pub fn new(
+        peri: impl Peripheral<P = T> + 'd,
+        scl: impl Peripheral<P = impl SclPin<T>> + 'd,
+        sda: impl Peripheral<P = impl SdaPin<T>> + 'd,
+    ) -> Self {
         let i2c = i2c::I2c::new_blocking(peri, scl, sda, I2CConfig::default());
         let interface = I2CDisplayInterface::new(i2c);
-        let mut display = Ssd1306::new(interface, DisplaySize128x64, DisplayRotation::Rotate0).into_buffered_graphics_mode();
+        let mut display =
+            Ssd1306::new(interface, DisplaySize128x64, DisplayRotation::Rotate0).into_buffered_graphics_mode();
         display.init().unwrap();
         let _ = display.clear(BinaryColor::Off);
 
@@ -58,14 +72,9 @@ impl <'d, T>Display<'d, T> where T: Instance {
 
         let mut formatted_hardware: String<20> = String::new();
         fmt::write(&mut formatted_hardware, format_args!("{}", hardware)).unwrap();
-        Text::with_alignment(
-            &formatted_hardware,
-            Point::new(64, 40),
-            medium_font,
-            Alignment::Center,
-        )
-        .draw(&mut self.0)
-        .unwrap();
+        Text::with_alignment(&formatted_hardware, Point::new(64, 40), medium_font, Alignment::Center)
+            .draw(&mut self.0)
+            .unwrap();
         self.0.flush().unwrap();
     }
 
@@ -80,15 +89,10 @@ impl <'d, T>Display<'d, T> where T: Instance {
             Some(temp) => {
                 let mut formatted_temp: String<7> = String::new();
                 fmt::write(&mut formatted_temp, format_args!("{:.1}", temp)).unwrap();
-                Text::with_alignment(
-                    &formatted_temp,
-                    position,
-                    text_style,
-                    Alignment::Center,
-                )
-                .draw(&mut self.0)
-                .unwrap();
-            },
+                Text::with_alignment(&formatted_temp, position, text_style, Alignment::Center)
+                    .draw(&mut self.0)
+                    .unwrap();
+            }
             None => {
                 Text::with_alignment("--", position, text_style, Alignment::Center)
                     .draw(&mut self.0)

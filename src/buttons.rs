@@ -36,8 +36,10 @@ impl<'a> Buttons<'a> {
         match select3(
             self.up.wait_for_rising_edge(),
             self.select.wait_for_rising_edge(),
-            self.down.wait_for_rising_edge()
-        ).await {
+            self.down.wait_for_rising_edge(),
+        )
+        .await
+        {
             Either3::First(_) => ButtonPress::Up,
             Either3::Second(_) => ButtonPress::Select,
             Either3::Third(_) => ButtonPress::Down,

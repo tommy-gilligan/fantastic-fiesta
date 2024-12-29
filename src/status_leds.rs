@@ -1,5 +1,5 @@
 use embassy_rp::{
-    gpio::{Output, Pin, Level},
+    gpio::{Level, Output, Pin},
     Peripheral,
 };
 
@@ -10,8 +10,12 @@ pub struct StatusLeds<'a> {
     ap: Output<'a>,
 }
 
-impl <'a>StatusLeds<'a> {
-    pub fn new(power: impl Peripheral<P = impl Pin> + 'a, wifi: impl Peripheral<P = impl Pin> + 'a, ap: impl Peripheral<P = impl Pin> + 'a) -> Self {
+impl<'a> StatusLeds<'a> {
+    pub fn new(
+        power: impl Peripheral<P = impl Pin> + 'a,
+        wifi: impl Peripheral<P = impl Pin> + 'a,
+        ap: impl Peripheral<P = impl Pin> + 'a,
+    ) -> Self {
         Self {
             power: Output::new(power, Level::Low),
             wifi: Output::new(wifi, Level::Low),

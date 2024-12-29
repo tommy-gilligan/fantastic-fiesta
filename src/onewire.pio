@@ -1,0 +1,35 @@
+.program onewire
+.side_set 1 pindirs
+
+public reset_bus:
+        set x, 28       side 1  [15]    ; pull bus low                          16
+loop_a:
+	jmp x-- loop_a  side 1  [15]    ;                                  29 x 16
+        set x, 8        side 0  [6]     ; release bus                            7
+loop_b:
+	jmp x-- loop_b  side 0  [6]     ;                                    9 x 7
+        mov isr, pins   side 0          ; read all pins to ISR (avoids autopush) 1
+        push            side 0          ; push result manually                   1
+        set x, 24       side 0  [7]     ;                                        8
+loop_c:
+	jmp x-- loop_c  side 0  [15]    ;                                  25 x 16
+
+.wrap_target
+public fetch_bit:
+        out x, 1        side 0          ; shift next bit from OSR (autopull)     1
+        jmp !x  send_0  side 1  [5]     ; pull bus low, branch if sending '0'    6
+
+send_1: ; send a '1' bit
+        set x, 2        side 0  [8]     ; release bus, wait for slave response   9
+        in pins, 1      side 0  [4]     ; read bus, shift bit to ISR (autopush)  5
+loop_e:
+	jmp x-- loop_e  side 0  [15]    ;                                   3 x 16
+        jmp fetch_bit   side 0          ;                                        1
+
+send_0: ; send a '0' bit
+        set x, 2        side 1  [5]     ; continue pulling bus low               6
+loop_d:
+	jmp x-- loop_d  side 1  [15]    ;                                   3 x 16
+        in null, 1      side 0  [8]     ; release bus, shift 0 to ISR (autopush) 9
+.wrap
+;; (17 instructions)

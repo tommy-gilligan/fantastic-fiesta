@@ -1,12 +1,13 @@
 #![no_std]
 #![no_main]
 #![allow(async_fn_in_trait)]
+#![allow(unused)]
 
 mod buttons;
-mod sensor;
-mod status_leds;
 mod display;
 mod network;
+mod onewire;
+mod status_leds;
 
 use assign_resources::assign_resources;
 use cyw43::JoinOptions;
@@ -23,7 +24,6 @@ use embassy_rp::{
     peripherals,
     peripherals::{DMA_CH0, PIO0, PIO1},
     pio::{InterruptHandler, Pio},
-    pio_programs::onewire::{PioOneWireProgram, PioOneWire}
 };
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel, pubsub::PubSubChannel};
 use embassy_time::{Duration, Timer};
@@ -32,12 +32,13 @@ use rand::RngCore;
 use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
 
-use buttons::{Buttons, ButtonPress};
-use sensor::Ds18b20;
-use status_leds::StatusLeds;
+use buttons::{ButtonPress, Buttons};
 use display::Display;
+use status_leds::StatusLeds;
 mod credentials;
 use credentials::configuration;
+use fixed::types::extra::U4;
+use fixed::FixedU16;
 
 enum ConfigurationState {
     WifiUp {
@@ -51,7 +52,14 @@ static mut CORE1_STACK: Stack<4096> = Stack::new();
 static EXECUTOR0: StaticCell<Executor> = StaticCell::new();
 static EXECUTOR1: StaticCell<Executor> = StaticCell::new();
 
-static MEASUREMENT_CHANNEL: PubSubChannel<CriticalSectionRawMutex, Option<f32>, 4, 4, 4> = PubSubChannel::new();
+#[derive(Copy, Clone, PartialEq)]
+enum OnewireEvent {
+    SensorConnected([u8; 6]),
+    SensorDisconnected([u8; 6]),
+    Measurement([u8; 6], FixedU16<U4>),
+}
+
+static MEASUREMENT_CHANNEL: PubSubChannel<CriticalSectionRawMutex, OnewireEvent, 4, 4, 4> = PubSubChannel::new();
 static CONFIGURATION_CHANNEL: Channel<CriticalSectionRawMutex, ConfigurationState, 1> = Channel::new();
 
 assign_resources! {
@@ -197,16 +205,78 @@ pub async fn measurement(_spawner: Spawner, r: Measurement) {
     let publisher = MEASUREMENT_CHANNEL.publisher().unwrap();
 
     let mut pio = Pio::new(r.pio_1, Irqs);
-    let prg = PioOneWireProgram::new(&mut pio.common);
-    let mut sensor = Ds18b20::new(PioOneWire::new(&mut pio.common, pio.sm0, r.pin_12, &prg));
+    let pin1 = pio.common.make_pio_pin(r.pin_9);
+    let pins = [&pin1];
+    let mut onewire = onewire::Onewire::new(pio.common, pio.sm0, &pins);
+    let mut devices = [None, None, None, None, None];
 
     loop {
-        sensor.start().await;
-        Timer::after_secs(1).await;
-        let t = sensor.temperature().await.ok();
-        println!("{:?}", t);
-        publisher.publish_immediate(t);
-        Timer::after_millis(1000).await;
+        let comparison = devices;
+
+        // allow it to fail a certain number of times in a given time period?
+        let result = onewire.romsearch(&mut devices, 0xf0).await;
+
+        if result == Err(onewire::rom::SearchErr::NoReply) {
+            devices.fill(None);
+        } else if result == Err(onewire::rom::SearchErr::DisconnectDuringSearch) {
+            devices = comparison;
+        }
+
+        for device in comparison {
+            if !devices.contains(&device) {
+                publisher.publish_immediate(OnewireEvent::SensorDisconnected(device.unwrap().serial));
+                println!("{:?} disconnected", device);
+            }
+        }
+        for device in devices {
+            if !comparison.contains(&device) {
+                publisher.publish_immediate(OnewireEvent::SensorConnected(device.unwrap().serial));
+                println!("{:?} connected", device);
+            }
+        }
+
+        for device in devices {
+            if let Some(d) = device {
+                let n = u64::from(d);
+                Timer::after_secs(1).await;
+                onewire.reset().await;
+                Timer::after_secs(1).await;
+
+                onewire.send(0x55).await;
+                for byte in n.to_le_bytes() {
+                    onewire.send(byte.into()).await;
+                }
+                onewire.send(0x44).await;
+
+                Timer::after_secs(1).await;
+                Timer::after_secs(1).await;
+                onewire.reset().await;
+
+                onewire.send(0x55).await;
+                for byte in n.to_le_bytes() {
+                    onewire.send(byte.into()).await;
+                }
+                onewire.send(0xBE).await;
+
+                Timer::after_secs(1).await;
+                // onewire.reset().await;
+
+                // clear fifos?
+                onewire.read().await;
+                let mut data: [u8; 9] = [0; 9];
+                for b in data.iter_mut() {
+                    *b = onewire.read().await;
+                }
+
+                let ds = onewire::scratchpad::Scratchpad::from(data);
+
+                if ds.check_crc() {
+                    publisher.publish_immediate(OnewireEvent::Measurement(device.unwrap().serial, ds.temperature));
+                }
+
+                println!("{} {} {:x}", (ds.temperature).to_num::<f32>(), (ds.check_crc()), data);
+            }
+        }
     }
 }
 
@@ -220,64 +290,83 @@ pub async fn user_interface(_spawner: Spawner, r: UserInterface) {
 
     loop {
         Timer::after_millis(1000).await;
-        display.show_measurements(
-            None,
-            measurements.next_message_pure().await,
-            None,
-            None,
-        );
+        // display.show_measurements(
+        //     None,
+        //     measurements.next_message_pure().await,
+        //     None,
+        //     None,
+        // );
     }
 
     if let ConfigurationState::WifiUp { ip, hardware } = CONFIGURATION_CHANNEL.receive().await {
         status_leds.turn_on_wifi();
-    //     let mut showing_configuration = false;
-    //     let mut measurement_state = MeasurementState {
-    //         a: None,
-    //         b: None,
-    //         c: None,
-    //         d: None,
-    //     };
-    //     display.show_measurements(
-    //         measurement_state.a,
-    //         measurement_state.b,
-    //         measurement_state.c,
-    //         measurement_state.d,
-    //     );
+        //     let mut showing_configuration = false;
+        //     let mut measurement_state = MeasurementState {
+        //         a: None,
+        //         b: None,
+        //         c: None,
+        //         d: None,
+        //     };
+        //     display.show_measurements(
+        //         measurement_state.a,
+        //         measurement_state.b,
+        //         measurement_state.c,
+        //         measurement_state.d,
+        //     );
 
-    //     loop {
-    //         match select(buttons.pressed(), measurements.next_message_pure()).await {
-    //             Either::First(button_press) => {
-    //                 println!("{:?}", button_press);
-    //                 match button_press {
-    //                     ButtonPress::Select => {
-    //                         if showing_configuration {
-    //                             showing_configuration = false;
-    //                             display.show_measurements(
-    //                                 measurement_state.a,
-    //                                 measurement_state.b,
-    //                                 measurement_state.c,
-    //                                 measurement_state.d,
-    //                             );
-    //                         } else {
-    //                             showing_configuration = true;
-    //                             display.show_configuration(&ip, &hardware);
-    //                         }
-    //                     }
-    //                     _ => {}
-    //                 }
-    //             }
-    //             Either::Second(measurement) => {
-    //                 measurement_state = measurement;
-    //                 if !showing_configuration {
-    //                     display.show_measurements(
-    //                         measurement_state.a,
-    //                         measurement_state.b,
-    //                         measurement_state.c,
-    //                         measurement_state.d,
-    //                     );
-    //                 }
-    //             }
-    //         }
-    //     }
+        //     loop {
+        //         match select(buttons.pressed(), measurements.next_message_pure()).await {
+        //             Either::First(button_press) => {
+        //                 println!("{:?}", button_press);
+        //                 match button_press {
+        //                     ButtonPress::Select => {
+        //                         if showing_configuration {
+        //                             showing_configuration = false;
+        //                             display.show_measurements(
+        //                                 measurement_state.a,
+        //                                 measurement_state.b,
+        //                                 measurement_state.c,
+        //                                 measurement_state.d,
+        //                             );
+        //                         } else {
+        //                             showing_configuration = true;
+        //                             display.show_configuration(&ip, &hardware);
+        //                         }
+        //                     }
+        //                     _ => {}
+        //                 }
+        //             }
+        //             Either::Second(measurement) => {
+        //                 measurement_state = measurement;
+        //                 if !showing_configuration {
+        //                     display.show_measurements(
+        //                         measurement_state.a,
+        //                         measurement_state.b,
+        //                         measurement_state.c,
+        //                         measurement_state.d,
+        //                     );
+        //                 }
+        //             }
+        //         }
+        //     }
     };
+}
+
+fn crc8(data: &[u8]) -> u8 {
+    let mut temp;
+    let mut data_byte;
+    let mut crc = 0;
+
+    for b in data {
+        data_byte = *b;
+        for _ in 0..8 {
+            temp = (crc ^ data_byte) & 0x01;
+            crc >>= 1;
+            if temp != 0 {
+                crc ^= 0x8C;
+            }
+            data_byte >>= 1;
+        }
+    }
+    crc
 }
