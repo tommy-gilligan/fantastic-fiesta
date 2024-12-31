@@ -40,6 +40,14 @@ use credentials::configuration;
 use fixed::types::extra::U4;
 use fixed::FixedU16;
 
+use embassy_rp::{
+    block::ImageDef,
+};
+
+#[link_section = ".start_block"]
+#[used]
+pub static IMAGE_DEF: ImageDef = ImageDef::secure_exe();
+
 enum ConfigurationState {
     WifiUp {
         ip: embassy_net::StaticConfigV4,
